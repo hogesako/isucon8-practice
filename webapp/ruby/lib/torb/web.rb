@@ -72,6 +72,43 @@ module Torb
         events
       end
 
+      def get_events_list(where = nil)
+        where ||= ->(e) { e['public_fg'] }
+
+        db.query('BEGIN')
+        begin
+          events =  db.query('SELECT * FROM events ORDER BY id ASC').select(&where).map do |event|
+            event['total']   = 0
+            event['remains'] = 0
+            event['sheets'] = {}
+
+            %w[S A B C].each do |rank|
+              event['sheets'][rank] = { 'total' => 0, 'remains' => 0, 'detail' => [] }
+            end
+
+            sheets = db.query('SELECT * FROM sheets ORDER BY `rank`, num')
+            sheets.each do |sheet|
+              event['sheets'][sheet['rank']]['price'] ||= event['price'] + sheet['price']
+              event['total'] += 1
+              event['sheets'][sheet['rank']]['total'] += 1
+            end
+            event['remains'] = event['total'] - db.xquery('SELECT count(*) as count FROM reservations WHERE event_id = ? AND canceled_at IS NULL', event['id']).first['count']
+            %w[S A B C].each do |rank|
+              event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - db.xquery('SELECT count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL AND s.rank = ?', event['id'],rank).first['count']
+            end
+
+            event['public'] = event.delete('public_fg')
+            event['closed'] = event.delete('closed_fg')
+            event
+          end
+          db.query('COMMIT')
+        rescue
+          db.query('ROLLBACK')
+        end
+
+        events
+      end
+
       def get_event(event_id, login_user_id = nil)
         event = db.xquery('SELECT * FROM events WHERE id = ?', event_id).first
         return unless event
@@ -166,7 +203,7 @@ module Torb
 
     get '/' do
       @user   = get_login_user
-      @events = get_events.map(&method(:sanitize_event))
+      @events = get_events_list.map(&method(:sanitize_event))
       erb :index
     end
 
@@ -340,7 +377,7 @@ module Torb
 
     get '/admin/' do
       @administrator = get_login_administrator
-      @events = get_events(->(_) { true }) if @administrator
+      @events = get_events_list(->(_) { true }) if @administrator
 
       erb :admin
     end
