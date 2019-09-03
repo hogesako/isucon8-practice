@@ -502,17 +502,18 @@ module Torb
     get '/admin/api/reports/events/:id/sales', admin_login_required: true do |event_id|
       event = get_event(event_id)
 
-      reservations = db.xquery('SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num, s.price AS sheet_price, e.price AS event_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = ? ORDER BY reserved_at ASC FOR UPDATE', event['id'])
+      reservations = db.xquery('SELECT r.id as reservation_id,e.id AS event_id, s.rank AS rank, s.num AS num,r.user_id as user_id, DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") as sold_at , case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end as canceled_at ,e.price+s.price AS price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = ? ORDER BY reserved_at ASC FOR UPDATE', event['id'])
+
       reports = reservations.map do |reservation|
         {
-          reservation_id: reservation['id'],
-          event_id:       event['id'],
-          rank:           reservation['sheet_rank'],
-          num:            reservation['sheet_num'],
+          reservation_id: reservation['reservation_id'],
+          event_id:       reservation['event_id'],
+          rank:           reservation['rank'],
+          num:            reservation['num'],
           user_id:        reservation['user_id'],
-          sold_at:        reservation['reserved_at'].iso8601,
-          canceled_at:    reservation['canceled_at']&.iso8601 || '',
-          price:          reservation['event_price'] + reservation['sheet_price'],
+          sold_at:        reservation['sold_at'],
+          canceled_at:    reservation['canceled_at'],
+          price:          reservation['price'],
         }
       end
 
@@ -520,20 +521,21 @@ module Torb
     end
 
     get '/admin/api/reports/sales', admin_login_required: true do
-      reservations = db.query('SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num, s.price AS sheet_price, e.id AS event_id, e.price AS event_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
+      reservations = db.query('SELECT r.id as reservation_id,e.id AS event_id, s.rank AS rank, s.num AS num,r.user_id as user_id, DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") as sold_at , case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end as canceled_at ,e.price+s.price AS price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
 
       reports = reservations.map do |reservation|
         {
-          reservation_id: reservation['id'],
+          reservation_id: reservation['reservation_id'],
           event_id:       reservation['event_id'],
-          rank:           reservation['sheet_rank'],
-          num:            reservation['sheet_num'],
+          rank:           reservation['rank'],
+          num:            reservation['num'],
           user_id:        reservation['user_id'],
-          sold_at:        reservation['reserved_at'].iso8601,
-          canceled_at:    reservation['canceled_at']&.iso8601 || '',
-          price:          reservation['event_price'] + reservation['sheet_price'],
+          sold_at:        reservation['sold_at'],
+          canceled_at:    reservation['canceled_at'],
+          price:          reservation['price'],
         }
       end
+
       render_report_csv(reports)
     end
   end
