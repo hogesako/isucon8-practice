@@ -77,6 +77,8 @@ module Torb
 
         db.query('BEGIN')
         begin
+          sheets = db.query('SELECT * FROM sheets ORDER BY `rank`, num')
+
           events =  db.query('SELECT * FROM events ORDER BY id ASC').select(&where).map do |event|
             event['total']   = 0
             event['remains'] = 0
@@ -86,12 +88,12 @@ module Torb
               event['sheets'][rank] = { 'total' => 0, 'remains' => 0, 'detail' => [] }
             end
 
-            sheets = db.query('SELECT * FROM sheets ORDER BY `rank`, num')
             sheets.each do |sheet|
               event['sheets'][sheet['rank']]['price'] ||= event['price'] + sheet['price']
               event['total'] += 1
               event['sheets'][sheet['rank']]['total'] += 1
             end
+
             event['remains'] = event['total'] - db.xquery('SELECT count(*) as count FROM reservations WHERE event_id = ? AND canceled_at IS NULL', event['id']).first['count']
             %w[S A B C].each do |rank|
               event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - db.xquery('SELECT count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL AND s.rank = ?', event['id'],rank).first['count']
@@ -110,6 +112,46 @@ module Torb
       end
 
       def get_event(event_id, login_user_id = nil)
+        event = db.xquery('SELECT * FROM events WHERE id = ?', event_id).first
+        return unless event
+
+        # zero fill
+        event['total']   = 0
+        event['remains'] = 0
+        event['sheets'] = {}
+        %w[S A B C].each do |rank|
+          event['sheets'][rank] = { 'total' => 0, 'remains' => 0, 'detail' => [] }
+        end
+
+        sheets = db.xquery('SELECT s.rank as rank,s.num as num ,s.price as price, r.reserved_at as reserved_at_date,r.user_id as reserve_user_id FROM sheets s left join reservations r on s.id = r.sheet_id and r.canceled_at is null and r.event_id = ? ORDER BY `rank`, num',event['id'])
+        sheets.each do |sheet|
+          event['sheets'][sheet['rank']]['price'] ||= event['price'] + sheet['price']
+          event['total'] += 1
+          event['sheets'][sheet['rank']]['total'] += 1
+
+          if sheet['reserved_at_date']
+            sheet['mine']        = true if login_user_id && sheet['reserve_user_id'] == login_user_id
+            sheet['reserved']    = true
+            sheet['reserved_at'] = sheet['reserved_at_date'].to_i
+          else
+            event['remains'] += 1
+            event['sheets'][sheet['rank']]['remains'] += 1
+          end
+
+          event['sheets'][sheet['rank']]['detail'].push(sheet)
+          sheet.delete('reserve_user_id')
+          sheet.delete('reserved_at_date')
+          sheet.delete('price')
+          sheet.delete('rank')
+        end
+
+        event['public'] = event.delete('public_fg')
+        event['closed'] = event.delete('closed_fg')
+
+        event
+      end
+
+      def get_event_org(event_id, login_user_id = nil)
         event = db.xquery('SELECT * FROM events WHERE id = ?', event_id).first
         return unless event
 
@@ -479,6 +521,7 @@ module Torb
 
     get '/admin/api/reports/sales', admin_login_required: true do
       reservations = db.query('SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num, s.price AS sheet_price, e.id AS event_id, e.price AS event_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
+
       reports = reservations.map do |reservation|
         {
           reservation_id: reservation['id'],
@@ -491,7 +534,6 @@ module Torb
           price:          reservation['event_price'] + reservation['sheet_price'],
         }
       end
-
       render_report_csv(reports)
     end
   end
