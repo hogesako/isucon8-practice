@@ -4,7 +4,7 @@ ROOT_DIR=$(cd $(dirname $0)/..; pwd)
 DB_DIR="$ROOT_DIR/db"
 BENCH_DIR="$ROOT_DIR/bench"
 
-export MYSQL_PWD=isucon
+export MYSQL_PWD=isucon!9910ISUCON
 
 mysql -uisucon -e "DROP DATABASE IF EXISTS torb; CREATE DATABASE torb;"
 mysql -uisucon torb < "$DB_DIR/schema.sql"
