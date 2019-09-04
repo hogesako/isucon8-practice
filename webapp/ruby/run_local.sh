@@ -7,4 +7,4 @@ export DB_PORT=3306
 export DB_USER=isucon
 export DB_PASS=isucon!9910ISUCON
 
-exec puma -p 8080 -v
+exec puma -p 8080 -v -t 16:16

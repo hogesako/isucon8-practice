@@ -6,6 +6,8 @@ gem 'erubi'
 gem 'mysql2'
 gem 'mysql2-cs-bind'
 
+gem 'stackprof'
+
 group :development do
   gem 'sinatra-contrib'
 end
