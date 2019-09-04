@@ -236,13 +236,16 @@ module Torb
       end
 
       def render_report_csv(reports)
-        reports = reports.sort_by { |report| report[:sold_at] }
+        #reports = reports.sort_by { |report| report[:sold_at] }
 
+        #header
         keys = %i[reservation_id event_id rank num price user_id sold_at canceled_at]
         body = keys.join(',')
         body << "\n"
+
+        # body
         reports.each do |report|
-          body << report.values_at(*keys).join(',')
+          body << report['csv']
           body << "\n"
         end
 
@@ -544,40 +547,14 @@ module Torb
     get '/admin/api/reports/events/:id/sales', admin_login_required: true do |event_id|
       event = get_event(event_id)
 
-      reservations = db.xquery('SELECT r.id as reservation_id,e.id AS event_id, s.rank AS rank, s.num AS num,r.user_id as user_id, DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") as sold_at , case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end as canceled_at ,e.price+s.price AS price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = ? ORDER BY reserved_at ASC FOR UPDATE', event['id'])
-
-      reports = reservations.map do |reservation|
-        {
-          reservation_id: reservation['reservation_id'],
-          event_id:       reservation['event_id'],
-          rank:           reservation['rank'],
-          num:            reservation['num'],
-          user_id:        reservation['user_id'],
-          sold_at:        reservation['sold_at'],
-          canceled_at:    reservation['canceled_at'],
-          price:          reservation['price'],
-        }
-      end
+      reports = db.xquery('SELECT CONCAT(r.id,",",e.id,",", s.rank,",",s.num,",",e.price+s.price,",",r.user_id,",", DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") , ",",case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end) as csv  FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = ? ORDER BY reserved_at ASC FOR UPDATE', event['id'])
 
       render_report_csv(reports)
     end
 
     get '/admin/api/reports/sales', admin_login_required: true do
-      reservations = db.query('SELECT STRAIGHT_JOIN r.id as reservation_id,e.id AS event_id, s.rank AS rank, s.num AS num,r.user_id as user_id, DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") as sold_at , case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end as canceled_at ,e.price+s.price AS price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
-
-      reports = reservations.map do |reservation|
-        {
-          reservation_id: reservation['reservation_id'],
-          event_id:       reservation['event_id'],
-          rank:           reservation['rank'],
-          num:            reservation['num'],
-          user_id:        reservation['user_id'],
-          sold_at:        reservation['sold_at'],
-          canceled_at:    reservation['canceled_at'],
-          price:          reservation['price'],
-        }
-      end
-
+      #reservations = db.query('SELECT STRAIGHT_JOIN r.id as reservation_id,e.id AS event_id, s.rank AS rank, s.num AS num,r.user_id as user_id, DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") as sold_at , case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end as canceled_at ,e.price+s.price AS price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
+      reports = db.query('SELECT STRAIGHT_JOIN CONCAT(r.id,",",e.id,",", s.rank,",",s.num,",",e.price+s.price,",",r.user_id,",", DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") , ",",case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end) as csv FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
       render_report_csv(reports)
     end
   end
