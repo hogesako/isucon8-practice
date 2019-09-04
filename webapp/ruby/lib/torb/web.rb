@@ -283,7 +283,7 @@ module Torb
       user['recent_reservations'] = recent_reservations
       user['total_price'] = db.xquery('SELECT IFNULL(SUM(e.price + s.price), 0) AS total_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.user_id = ? AND r.canceled_at IS NULL', user['id']).first['total_price']
 
-      sheets = db.query('SELECT * FROM sheets ORDER BY `rank`, num')
+      sheets_ranks = db.query('SELECT rank,price,count(*) as count FROM sheets GROUP BY rank,price')
 
       rows = db.xquery('SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5', user['id'])
       recent_events = rows.map do |row|
@@ -294,12 +294,10 @@ module Torb
         event['sheets'] = {}
         %w[S A B C].each do |rank|
           event['sheets'][rank] = { 'total' => 0, 'remains' => 0 }
-        end
-
-        sheets.each do |sheet|
-          event['sheets'][sheet['rank']]['price'] ||= event['price'] + sheet['price']
-          event['total'] += 1
-          event['sheets'][sheet['rank']]['total'] += 1
+          selected = sheets_ranks.select{ |sheets_rank| sheets_rank['rank'] == rank}.first
+          event['sheets'][rank]['price'] ||= event['price'] + selected['price']
+          event['total'] += selected['count']
+          event['sheets'][rank]['total'] = selected['count']
         end
 
         event['remains'] = event['total']
@@ -343,7 +341,7 @@ module Torb
     end
 
     get '/api/events' do
-      events = get_events.map(&method(:sanitize_event))
+      events = get_events_list.map(&method(:sanitize_event))
       events.to_json
     end
 
@@ -367,12 +365,14 @@ module Torb
       sheet = nil
       reservation_id = nil
       loop do
-        sheet = db.xquery('SELECT * FROM sheets WHERE id NOT IN (SELECT sheet_id FROM reservations WHERE event_id = ? AND canceled_at IS NULL FOR UPDATE) AND `rank` = ? ORDER BY RAND() LIMIT 1', event['id'], rank).first
+        sheet = db.xquery('SELECT id,num FROM avail_sheets WHERE event_id = ? AND `rank` = ? ORDER BY RAND() LIMIT 1 FOR UPDATE', event['id'], rank).first
         halt_with_error 409, 'sold_out' unless sheet
         db.query('BEGIN')
         begin
           db.xquery('INSERT INTO reservations (event_id, sheet_id, user_id, reserved_at) VALUES (?, ?, ?, ?)', event['id'], sheet['id'], user['id'], Time.now.utc.strftime('%F %T.%6N'))
           reservation_id = db.last_id
+          # avail_seatsから削除
+          db.xquery('delete from avail_sheets WHERE event_id = ? AND id = ?', event['id'], sheet['id'])
           db.query('COMMIT')
         rescue => e
           db.query('ROLLBACK')
@@ -390,9 +390,9 @@ module Torb
     delete '/api/events/:id/sheets/:rank/:num/reservation', login_required: true do |event_id, rank, num|
       user  = get_login_user
       event = get_event(event_id, user['id'])
+
       halt_with_error 404, 'invalid_event' unless event && event['public']
       halt_with_error 404, 'invalid_rank'  unless validate_rank(rank)
-
       sheet = db.xquery('SELECT * FROM sheets WHERE `rank` = ? AND num = ?', rank, num).first
       halt_with_error 404, 'invalid_sheet' unless sheet
 
@@ -409,6 +409,8 @@ module Torb
         end
 
         db.xquery('UPDATE reservations SET canceled_at = ? WHERE id = ?', Time.now.utc.strftime('%F %T.%6N'), reservation['id'])
+        db.xquery('insert into avail_sheets (id, event_id, rank , num) VALUES (?, ?, ?, ?)', sheet['id'],event['id'],rank,num)
+
         db.query('COMMIT')
       rescue => e
         warn "rollback by: #{e}"
@@ -459,6 +461,7 @@ module Torb
       begin
         db.xquery('INSERT INTO events (title, public_fg, closed_fg, price) VALUES (?, ?, 0, ?)', title, public, price)
         event_id = db.last_id
+        db.xquery('insert into avail_sheets (id, rank, event_id,num) select s.id, s.rank, e.id ,s.num from events e cross join sheets s where e.id = ?',event_id)
         db.query('COMMIT')
       rescue
         db.query('ROLLBACK')
@@ -502,16 +505,12 @@ module Torb
     end
 
     get '/admin/api/reports/events/:id/sales', admin_login_required: true do |event_id|
-      event = get_event(event_id)
-
-      reports = db.xquery('SELECT CONCAT(r.id,",",e.id,",", s.rank,",",s.num,",",e.price+s.price,",",r.user_id,",", DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") , ",",case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end) as csv  FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = ? ORDER BY reserved_at ASC FOR UPDATE', event['id'])
-
+      reports = db.xquery('SELECT CONCAT(r.id,",",e.id,",", s.rank,",",s.num,",",e.price+s.price,",",r.user_id,",", DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") , ",",case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end) as csv  FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = ? ORDER BY reserved_at ASC', event_id)
       render_report_csv(reports)
     end
 
     get '/admin/api/reports/sales', admin_login_required: true do
-      #reservations = db.query('SELECT STRAIGHT_JOIN r.id as reservation_id,e.id AS event_id, s.rank AS rank, s.num AS num,r.user_id as user_id, DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") as sold_at , case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end as canceled_at ,e.price+s.price AS price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
-      reports = db.query('SELECT STRAIGHT_JOIN CONCAT(r.id,",",e.id,",", s.rank,",",s.num,",",e.price+s.price,",",r.user_id,",", DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") , ",",case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end) as csv FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC FOR UPDATE')
+      reports = db.query('SELECT STRAIGHT_JOIN CONCAT(r.id,",",e.id,",", s.rank,",",s.num,",",e.price+s.price,",",r.user_id,",", DATE_FORMAT(r.reserved_at, "%Y-%m-%dT%TZ") , ",",case r.canceled_at is null when 1 then "" else DATE_FORMAT(r.canceled_at, "%Y-%m-%dT%TZ") end) as csv FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id ORDER BY reserved_at ASC')
       render_report_csv(reports)
     end
   end
