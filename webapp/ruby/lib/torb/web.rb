@@ -94,10 +94,21 @@ module Torb
               event['sheets'][sheet['rank']]['total'] += 1
             end
 
-            event['remains'] = event['total'] - db.xquery('SELECT count(*) as count FROM reservations WHERE event_id = ? AND canceled_at IS NULL', event['id']).first['count']
+            event['remains'] = event['total']
+            reserve_counts = db.xquery('SELECT rank,count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL group by rank', event['id'])
             %w[S A B C].each do |rank|
-              event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - db.xquery('SELECT count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL AND s.rank = ?', event['id'],rank).first['count']
+              count = 0 
+              selected = reserve_counts.select{|reserve_count| reserve_count['rank'] == rank}
+              if selected.size > 0 then
+                count = selected.first['count']
+              end
+              event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - count
+              event['remains'] = event['remains'] - count
             end
+            # event['remains'] = event['total'] - db.xquery('SELECT count(*) as count FROM reservations WHERE event_id = ? AND canceled_at IS NULL', event['id']).first['count']
+            # %w[S A B C].each do |rank|
+            #   event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - db.xquery('SELECT count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL AND s.rank = ?', event['id'],rank).first['count']
+            # end
 
             event['public'] = event.delete('public_fg')
             event['closed'] = event.delete('closed_fg')
@@ -331,9 +342,16 @@ module Torb
           event['sheets'][sheet['rank']]['total'] += 1
         end
 
-        event['remains'] = event['total'] - db.xquery('SELECT count(*) as count FROM reservations WHERE event_id = ? AND canceled_at IS NULL', event['id']).first['count']
+        event['remains'] = event['total']
+        reserve_counts = db.xquery('SELECT rank,count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL group by rank', event['id'])
         %w[S A B C].each do |rank|
-          event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - db.xquery('SELECT count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL AND s.rank = ?', event['id'],rank).first['count']
+          count = 0 
+          selected = reserve_counts.select{|reserve_count| reserve_count['rank'] == rank}
+          if selected.size > 0 then
+            count = selected.first['count']
+          end
+          event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - count
+          event['remains'] = event['remains'] - count
         end
         event['public'] = event.delete('public_fg')
         event['closed'] = event.delete('closed_fg')
