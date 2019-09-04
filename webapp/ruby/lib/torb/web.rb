@@ -312,10 +312,31 @@ module Torb
       user['recent_reservations'] = recent_reservations
       user['total_price'] = db.xquery('SELECT IFNULL(SUM(e.price + s.price), 0) AS total_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.user_id = ? AND r.canceled_at IS NULL', user['id']).first['total_price']
 
+      sheets = db.query('SELECT * FROM sheets ORDER BY `rank`, num')
+
       rows = db.xquery('SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5', user['id'])
       recent_events = rows.map do |row|
-        event = get_event(row['event_id'])
-        event['sheets'].each { |_, sheet| sheet.delete('detail') }
+        event = db.xquery('SELECT * FROM events WHERE id = ?', row['event_id']).first
+        # zero fill
+        event['total']   = 0
+        event['remains'] = 0
+        event['sheets'] = {}
+        %w[S A B C].each do |rank|
+          event['sheets'][rank] = { 'total' => 0, 'remains' => 0 }
+        end
+
+        sheets.each do |sheet|
+          event['sheets'][sheet['rank']]['price'] ||= event['price'] + sheet['price']
+          event['total'] += 1
+          event['sheets'][sheet['rank']]['total'] += 1
+        end
+
+        event['remains'] = event['total'] - db.xquery('SELECT count(*) as count FROM reservations WHERE event_id = ? AND canceled_at IS NULL', event['id']).first['count']
+        %w[S A B C].each do |rank|
+          event['sheets'][rank]['remains'] = event['sheets'][rank]['total'] - db.xquery('SELECT count(*) as count FROM reservations r inner join sheets s on r.sheet_id = s.id WHERE r.event_id = ? AND r.canceled_at IS NULL AND s.rank = ?', event['id'],rank).first['count']
+        end
+        event['public'] = event.delete('public_fg')
+        event['closed'] = event.delete('closed_fg')
         event
       end
       user['recent_events'] = recent_events
